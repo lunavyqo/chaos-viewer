@@ -27,7 +27,6 @@ your project and everything else works unchanged.
   "readFirst": "docs your contributors should read before writing code",
   "rules": "legal/purity rules line",
   "nearMissNote": "what to do with a close-but-unmatched attempt", // omit to hide
-  "convention": "default",                // or "experimental" — see below
 
   "claimsApi": "/api/claims",             // omit BOTH to hide the lock UI entirely
   "claimsProxyTarget": "https://your-claims-service"
@@ -36,16 +35,11 @@ your project and everything else works unchanged.
 
 `verifyCommand` placeholders: `{name} {module} {addr} {addrHex} {size} {sizeHex} {github}`.
 
-### Tracking convention (`default` | `experimental`)
+### Attempt tree + matchProvenance (this fork)
 
-| | **default** | **experimental** |
-|--|-------------|------------------|
-| Prompt | Classic match prompt | + MATCH_RESULT attempt-tree scaffolding |
-| `matchProvenance` on matched funcs | optional | **required** (how only) |
-| Credit / colors | `author` | `author` (never put operator in provenance) |
-
-Set `"convention": "experimental"` in the project block of `chaos-db.json`, or
-toggle **Experimental** in the sidebar, or open with `?convention=experimental`.
+This fork always scaffolds **MATCH_RESULT** attempt-tree logging in prompts and
+expects **how** records on matched functions. Credit / colors still use
+**`author` only**.
 
 **`matchProvenance` shape** (atlas field on each matched function):
 
@@ -56,6 +50,9 @@ toggle **Experimental** in the sidebar, or open with `?convention=experimental`.
 
 Use slug tokens (no spaces). Per-try history stays in the decomp repo (e.g.
 `config/match_attempts.jsonl`), not in the published atlas.
+
+> Local fork only — do not push this to tangosdev/chaos-viewer without discussing
+> with Tango first.
 
 If you use a claims/locking service, point the vite dev proxy at it in
 `vite.config.ts` (the `/api/claims` entry) and have it answer

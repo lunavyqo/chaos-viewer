@@ -1,12 +1,10 @@
 /**
- * Experimental convention helpers (parity with chaos-viewer-cli).
+ * Attempt-tree / provenance helpers for this fork.
  *
- * Default = classic chaos-viewer / sm64ds-compatible.
- * Experimental = require matchProvenance on matched functions + MATCH_RESULT
- * attempt-tree scaffolding in copied prompts.
+ * This viewer always uses the experimental tracking model (MATCH_RESULT prompts,
+ * matchProvenance as how-record). There is no default/classic dual mode here —
+ * discuss any upstream contribution with Tango separately.
  */
-
-export type Convention = 'default' | 'experimental'
 
 export interface MatchProvenance {
   kind: 'human' | 'ai'
@@ -38,12 +36,6 @@ export interface ExpDetail {
   draftDiv?: number
 }
 
-export function parseConvention(raw?: string | null): Convention {
-  const s = (raw ?? '').trim().toLowerCase()
-  if (s === 'experimental' || s === 'exp' || s === 'experiment') return 'experimental'
-  return 'default'
-}
-
 export function provenanceSummary(p: MatchProvenance): string {
   if (p.kind === 'human') {
     return p.note && p.note.trim() ? `human · ${p.note.trim()}` : 'human'
@@ -65,22 +57,16 @@ export function provenanceIsComplete(p: MatchProvenance): boolean {
 
 export type ProvenanceStatus =
   | { kind: 'not_matched' }
-  | { kind: 'optional_missing' }
   | { kind: 'required_missing' }
   | { kind: 'present'; summary: string }
   | { kind: 'incomplete'; summary: string }
 
+/** Matched functions must carry a complete how-record. */
 export function provenanceStatus(
-  convention: Convention,
   fn: Pick<ExpFunction, 'matched' | 'matchProvenance'>,
 ): ProvenanceStatus {
   if (!fn.matched) return { kind: 'not_matched' }
   const p = fn.matchProvenance
-  if (convention === 'default') {
-    if (!p) return { kind: 'optional_missing' }
-    return { kind: 'present', summary: provenanceSummary(p) }
-  }
-  // experimental
   if (!p) return { kind: 'required_missing' }
   if (!provenanceIsComplete(p)) {
     return { kind: 'incomplete', summary: provenanceSummary(p) }
@@ -97,10 +83,8 @@ export function isGhidraScaffoldText(s: string): boolean {
   )
 }
 
-/**
- * Experimental overlay after the classic prompt header.
- */
-export function experimentalHeaderAddon(
+/** Overlay after the classic prompt header (always applied in this fork). */
+export function matchResultHeaderAddon(
   author: string,
   sessionScope: 'focused' | 'batch',
   batchSize: number,
@@ -117,7 +101,7 @@ export function experimentalHeaderAddon(
   return `
 
 ======================================================================
-EXPERIMENTAL — WHO vs HOW vs ATTEMPT TREE
+WHO vs HOW vs ATTEMPT TREE
 ======================================================================
 WHO (credit, contributor colors) → function field \`author\` (GitHub login)
 HOW  (final method when banked)  → \`matchProvenance\` only
@@ -201,7 +185,7 @@ Do NOT omit MATCH_RESULT because the try was "useless" — useless tries are dat
 Do NOT put secrets or full chain-of-thought dumps into the log.`
 }
 
-export function experimentalMatchResultBlock(
+export function matchResultBlock(
   fn: ExpFunction,
   det: ExpDetail | null,
   author: string,
@@ -278,7 +262,7 @@ MATCH_RESULT:
 `
 }
 
-export function experimentalFooterAddon(
+export function matchResultFooterAddon(
   author: string,
   sessionScope: 'focused' | 'batch',
   batchSize: number,
@@ -293,7 +277,7 @@ export function experimentalFooterAddon(
   return `
 
 ======================================================================
-EXPERIMENTAL — BEFORE YOU FINISH
+BEFORE YOU FINISH
 ======================================================================
 1. For EACH function, emit a filled MATCH_RESULT **node** for this try.
 2. Identity (required): schemaVersion=1, functionId (atlas id), unique attemptId
