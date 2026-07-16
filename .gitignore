@@ -25,3 +25,6 @@ dist-ssr
 
 project.config.json
 public/details/
+
+# Local EP atlas snapshot for Pi/dev (not project data)
+public/ep-test/

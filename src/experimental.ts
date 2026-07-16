@@ -10,7 +10,7 @@ export interface MatchProvenance {
   kind: 'human' | 'ai'
   /** AI model slug (e.g. grok-4.5). Required for complete AI records. */
   model?: string
-  /** Reasoning / effort: high | medium | low | none */
+  /** Reasoning / effort: high | xhigh | max | medium | low | none */
   reasoning?: string
   /** Harness slug: grok-build, cursor-agent, … */
   harness?: string
@@ -177,12 +177,154 @@ ${authorLine}
 TOKEN RULES for matchProvenance (ai):
   - model:   GOOD: grok-4.5  claude-opus-4   BAD: "Grok 4.5"
   - harness: GOOD: grok-build  cursor-agent  BAD: "Grok Build"
-  - reasoning: high | medium | low | none | …
+  - reasoning: high | xhigh | max | medium | low | none
   Do NOT put the operator name in matchProvenance (no \`by\` field).
 
 Do NOT invent a match. VERIFY until MATCH.
 Do NOT omit MATCH_RESULT because the try was "useless" — useless tries are data.
 Do NOT put secrets or full chain-of-thought dumps into the log.`
+}
+
+export type DraftPromptOpts = {
+  model?: string
+  reasoning?: string
+  harness?: string
+  /** When false, do not treat detail draft as near-miss (default true). */
+  includeNearMissDraft?: boolean
+  /** When false, do not treat Ghidra-tagged detail draft as scaffold (default true). */
+  includeGhidraDraft?: boolean
+}
+
+/** Fixed model list (parity with chaos-viewer-cli Prompt `m` picker). */
+export const PROVENANCE_MODELS: { slug: string; label: string }[] = [
+  { slug: 'grok-4.5', label: 'Grok 4.5' },
+  { slug: 'composer-2.5', label: 'Composer 2.5' },
+  { slug: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+  { slug: 'claude-opus-4.8', label: 'Claude Opus 4.8' },
+  { slug: 'claude-opus-4.7', label: 'Claude Opus 4.7' },
+  { slug: 'claude-opus-4.6', label: 'Claude Opus 4.6' },
+  { slug: 'claude-fable-5', label: 'Claude Fable 5' },
+  { slug: 'gpt-5.6-luna', label: 'GPT 5.6 Luna' },
+  { slug: 'gpt-5.6-terra', label: 'GPT 5.6 Terra' },
+  { slug: 'gpt-5.6-sol', label: 'GPT 5.6 Sol' },
+  { slug: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+  { slug: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+  { slug: 'glm-5.2', label: 'GLM 5.2' },
+  { slug: 'kimi-k3', label: 'Kimi K3' },
+  { slug: 'kimi-3', label: 'Kimi 3' },
+  { slug: 'hy3', label: 'Hy3' },
+  { slug: 'stepfun-3.7', label: 'StepFun 3.7' },
+  { slug: 'muse-spark-1.1', label: 'Muse Spark 1.1' },
+  { slug: 'gemini-3.5-pro', label: 'Gemini 3.5 Pro' },
+  { slug: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+]
+
+/** Reasoning / “thinking initiative” levels (CLI Prompt `y`). */
+export const PROVENANCE_REASONING_LEVELS = [
+  'high',
+  'xhigh',
+  'max',
+  'medium',
+  'low',
+  'none',
+] as const
+
+/** Harness presets (CLI Prompt `w`). */
+export const PROVENANCE_HARNESS_PRESETS = [
+  'grok-build',
+  'cursor-agent',
+  'claude-code',
+  'codex',
+  'antigravity',
+  'manual',
+] as const
+
+export type ProvenanceReasoning = (typeof PROVENANCE_REASONING_LEVELS)[number]
+export type ProvenanceHarness = (typeof PROVENANCE_HARNESS_PRESETS)[number]
+
+export function provenanceModelLabel(slug: string): string {
+  return PROVENANCE_MODELS.find(m => m.slug === slug)?.label ?? slug
+}
+
+export function isKnownProvenanceModel(slug: string): boolean {
+  return PROVENANCE_MODELS.some(m => m.slug === slug)
+}
+
+export function isKnownReasoning(r: string): r is ProvenanceReasoning {
+  return (PROVENANCE_REASONING_LEVELS as readonly string[]).includes(r)
+}
+
+export function isKnownHarness(h: string): h is ProvenanceHarness {
+  return (PROVENANCE_HARNESS_PRESETS as readonly string[]).includes(h)
+}
+
+const LS_MODEL = 'chaos-prompt-model'
+const LS_REASONING = 'chaos-prompt-reasoning'
+const LS_HARNESS = 'chaos-prompt-harness'
+
+/** Read saved pickers (localStorage); fall back to CLI defaults. */
+export function loadProvenancePrefs(): {
+  model: string
+  reasoning: ProvenanceReasoning
+  harness: ProvenanceHarness
+} {
+  let model = 'grok-4.5'
+  let reasoning: ProvenanceReasoning = 'high'
+  let harness: ProvenanceHarness = 'grok-build'
+  try {
+    const m = localStorage.getItem(LS_MODEL)
+    if (m && isKnownProvenanceModel(m)) model = m
+    const r = localStorage.getItem(LS_REASONING)
+    if (r && isKnownReasoning(r)) reasoning = r
+    const h = localStorage.getItem(LS_HARNESS)
+    if (h && isKnownHarness(h)) harness = h
+  } catch {
+    /* ignore */
+  }
+  return { model, reasoning, harness }
+}
+
+export function saveProvenanceModel(slug: string): void {
+  try {
+    if (isKnownProvenanceModel(slug)) localStorage.setItem(LS_MODEL, slug)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function saveProvenanceReasoning(r: string): void {
+  try {
+    if (isKnownReasoning(r)) localStorage.setItem(LS_REASONING, r)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function saveProvenanceHarness(h: string): void {
+  try {
+    if (isKnownHarness(h)) localStorage.setItem(LS_HARNESS, h)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** What this prompt will actually attach from a detail draft (web has one draft slot). */
+export function draftInclusion(
+  det: ExpDetail | null | undefined,
+  opts?: Pick<DraftPromptOpts, 'includeNearMissDraft' | 'includeGhidraDraft'>,
+): { nearMiss: boolean; ghidra: boolean; text: string | null; draftDiv?: number } {
+  const includeNear = opts?.includeNearMissDraft !== false
+  const includeGhidra = opts?.includeGhidraDraft !== false
+  const raw = det?.draft?.trim()
+  if (!raw) return { nearMiss: false, ghidra: false, text: null }
+  const isGhidra = isGhidraScaffoldText(raw)
+  if (isGhidra && includeGhidra) {
+    return { nearMiss: false, ghidra: true, text: raw, draftDiv: det?.draftDiv }
+  }
+  if (!isGhidra && includeNear) {
+    return { nearMiss: true, ghidra: false, text: raw, draftDiv: det?.draftDiv }
+  }
+  return { nearMiss: false, ghidra: false, text: null }
 }
 
 export function matchResultBlock(
@@ -191,19 +333,16 @@ export function matchResultBlock(
   author: string,
   sessionScope: 'focused' | 'batch',
   batchSize: number,
-  opts?: { model?: string; reasoning?: string; harness?: string },
+  opts?: DraftPromptOpts,
 ): string {
   const authorComment =
     author === 'YOUR_GITHUB_LOGIN'
       ? '# REQUIRED GitHub login for credit (classic author field). Replace placeholder.'
       : '# REQUIRED GitHub login for credit — keep this value (claims / env).'
 
-  const usedNearMiss = !!(
-    det?.draft &&
-    det.draft.trim() &&
-    !isGhidraScaffoldText(det.draft)
-  )
-  const usedGhidra = !!(det?.draft && isGhidraScaffoldText(det.draft))
+  const incl = draftInclusion(det, opts)
+  const usedNearMiss = incl.nearMiss
+  const usedGhidra = incl.ghidra
   const baseKind =
     usedNearMiss && usedGhidra
       ? 'mixed'
@@ -252,7 +391,7 @@ MATCH_RESULT:
   matchProvenance:
     kind: ai                    # ai | human
     model: "${model}"            # slug; NOT display names like "Grok 4.5"
-    reasoning: "${reasoning}"    # high | medium | low | none
+    reasoning: "${reasoning}"    # high | xhigh | max | medium | low | none
     harness: "${harness}"        # slug; NOT display names like "Grok Build"
   divergences: null
   prevBestDivergences: null
