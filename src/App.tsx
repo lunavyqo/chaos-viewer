@@ -120,17 +120,42 @@ const VIEW_ONLY = import.meta.env.MODE === 'publicview'
 const _url = new URL(window.location.href)
 function _param(k: string) { return _url.searchParams.get(k) || _url.hash.match(new RegExp(`[#&]${k}=([^&]+)`))?.[1] }
 function _repoName(gh?: string | null) { return gh ? gh.replace(/\/+$/, '').split('/').slice(-1)[0] : undefined }
+
+/**
+ * This fork's default decomp (same pattern as hosting chaos-viewer for SM64DS):
+ * every page load live-fetches the published atlas from the decomp's chaos-data
+ * branch. CI on that repo rewrites the file; no manual Pi rsync of the DB.
+ */
+const DEFAULT_DECOMP_GITHUB = 'https://github.com/lunavyqo/electroplankton-decomp'
+const DEFAULT_DECOMP_DATA_URL =
+  'https://raw.githubusercontent.com/lunavyqo/electroplankton-decomp/chaos-data/chaos-db.json'
+
+/** Frozen local/Pi test dumps must not win over the live GitHub atlas. */
+function isStaleLocalDataUrl(url: string | null | undefined): boolean {
+  if (!url) return false
+  return /\/ep-test\//i.test(url) || /\/public\/ep-test/i.test(url)
+}
+
 const LINK_REPO = _param('repo') ? decodeURIComponent(_param('repo')!) : null
 const LINK_BRANCH = _param('branch') ? decodeURIComponent(_param('branch')!) : null
 const LINK_DISCORD = _param('discord') ? decodeURIComponent(_param('discord')!) : null
-// URL to a project's published chaos-db.json (its own generated data). This is what
-// makes the hosted viewer work for ANY project: point it at that project's data file.
-const DATA_URL_INIT = _param('data') ? decodeURIComponent(_param('data')!)
-  : (() => { try { return JSON.parse(localStorage.getItem('chaos-project') || '{}').dataUrl || null } catch { return null } })()
-  // final fallback: the project's own published data endpoint, baked in at build
-  // time. This is what stops a hosted single-file build from freezing on its
-  // snapshot -- it live-fetches current data on every load.
+
+// URL to a project's published chaos-db.json. Explicit ?data= wins (except ep-test
+// traps — those were a one-off deploy path and freeze the map).
+const _rawDataParam = _param('data') ? decodeURIComponent(_param('data')!) : null
+const _savedDataUrl = (() => {
+  try {
+    return (JSON.parse(localStorage.getItem('chaos-project') || '{}') as { dataUrl?: string }).dataUrl || null
+  } catch {
+    return null
+  }
+})()
+const DATA_URL_INIT =
+  (_rawDataParam && !isStaleLocalDataUrl(_rawDataParam) ? _rawDataParam : null)
+  || (_savedDataUrl && !isStaleLocalDataUrl(_savedDataUrl) ? _savedDataUrl : null)
   || ((bundledDb as ChaosDb).project?.dataUrl ?? null)
+  || DEFAULT_DECOMP_DATA_URL
+
 const HAS_LINK = !!(LINK_REPO || DATA_URL_INIT)
 
 const urlProject: Partial<ProjectConfig> = {}
@@ -140,13 +165,39 @@ if (LINK_DISCORD) urlProject.discord = LINK_DISCORD
 // localStorage config is used only when the URL did NOT specify one (so a shared
 // link works regardless of what the recipient saved before).
 const savedProject: Partial<ProjectConfig> | null = (() => {
-  if (HAS_LINK) return null
-  try { return JSON.parse(localStorage.getItem('chaos-project') || 'null') } catch { return null }
+  if (HAS_LINK && !_savedDataUrl) return null
+  if (LINK_REPO || (_rawDataParam && !isStaleLocalDataUrl(_rawDataParam))) return null
+  try {
+    const p = JSON.parse(localStorage.getItem('chaos-project') || 'null') as Partial<ProjectConfig> | null
+    if (!p) return null
+    // Drop stale ep-test dataUrl from old Pi tests so we re-bind to GitHub chaos-data.
+    if (p.dataUrl && isStaleLocalDataUrl(p.dataUrl)) {
+      const { dataUrl: _drop, ...rest } = p as ProjectConfig & { dataUrl?: string }
+      return Object.keys(rest).length ? rest : null
+    }
+    return p
+  } catch {
+    return null
+  }
 })()
 
+// Default this hosted fork to EP branding until live atlas project block arrives.
+const FORK_DEFAULTS: Partial<ProjectConfig> = {
+  name: 'electroplankton-decomp',
+  github: DEFAULT_DECOMP_GITHUB,
+  dataUrl: DEFAULT_DECOMP_DATA_URL,
+}
+
 // P starts from the bundled data's project; the runtime data load can refine it.
-let P: ProjectConfig = { ...(BUNDLED.project ?? {}), ...(savedProject ?? {}), ...urlProject } as ProjectConfig
-const HAS_BUNDLED_DATA = (BUNDLED.functions?.length ?? 0) > 0
+let P: ProjectConfig = {
+  ...FORK_DEFAULTS,
+  ...(BUNDLED.project ?? {}),
+  ...(savedProject ?? {}),
+  ...urlProject,
+} as ProjectConfig
+// Hosted single-file builds should always live-fetch; do not treat a huge baked
+// snapshot as the source of truth when we have a dataUrl (SM64DS-style).
+const HAS_BUNDLED_DATA = false
 // details chunks live next to the data file
 let DETAILS_BASE = DATA_URL_INIT ? DATA_URL_INIT.replace(/[^/]*$/, '') + 'details/' : `${import.meta.env.BASE_URL}details/`
 const BATCH_MAX = 16
@@ -855,16 +906,28 @@ function App() {
   const [dataLoading, setDataLoading] = useState(!!DATA_URL_INIT)
   const [dataError, setDataError] = useState(false)
   // (hasUsableData defined below)
-  // load the project's own data file when we have one
+  // load the project's own data file when we have one (always for this fork default)
   useEffect(() => {
     if (!dataUrl) return
+    // Migrate away from frozen Pi /ep-test/ bookmarks in localStorage.
+    try {
+      const raw = localStorage.getItem('chaos-project')
+      if (raw) {
+        const p = JSON.parse(raw) as { dataUrl?: string }
+        if (p.dataUrl && isStaleLocalDataUrl(p.dataUrl)) {
+          delete p.dataUrl
+          localStorage.setItem('chaos-project', JSON.stringify(p))
+        }
+      }
+    } catch { /* ignore */ }
     DETAILS_BASE = dataUrl.replace(/[^/]*$/, '') + 'details/'
     detailCache.clear()
     let cancelled = false
     setDataLoading(true); setDataError(false)
     fetch(bust(dataUrl)).then(r => r.ok ? r.json() : Promise.reject(r.status)).then((j: ChaosDb) => {
       if (cancelled) return
-      if (j.project) P = { ...j.project, ...urlProject }   // URL repo/discord still win
+      if (j.project) P = { ...FORK_DEFAULTS, ...j.project, ...urlProject }   // URL repo/discord still win
+      else P = { ...FORK_DEFAULTS, ...P, ...urlProject }
       setDb(j); setDataLoading(false)
     }).catch(() => { if (!cancelled) { setDataLoading(false); setDataError(true) } })
     return () => { cancelled = true }
