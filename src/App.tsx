@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Search, ChevronRight, X, Link2, FileCode, Lock, RefreshCw, Plus, Minus, Palette, Settings, MessageCircle } from 'lucide-react'
+import { Search, ChevronRight, X, Link2, FileCode, Lock, RefreshCw, Plus, Minus, Palette, Settings, MessageCircle, User } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Treemap } from './components/Treemap'
 import { Bubbles } from './components/Bubbles'
+import {
+  experimentalFooterAddon,
+  experimentalHeaderAddon,
+  experimentalMatchResultBlock,
+  operatorGithubHandle,
+  parseConvention,
+  provenanceStatus,
+  type Convention,
+  type MatchProvenance,
+} from './experimental'
 import './App.css'
 
 interface ChaosFunction {
@@ -19,6 +29,8 @@ interface ChaosFunction {
   floor?: string        // parked reason (documented compiler floor)
   sim?: number          // best coddog opcode similarity (unmatched only)
   sibling?: string      // that best matched sibling's name
+  /** How it was matched (experimental atlases). Who stays in `author`. */
+  matchProvenance?: MatchProvenance
 }
 
 interface FunctionDetail {
@@ -63,6 +75,12 @@ interface ProjectConfig {
   // #claims_session=<token>&handle=<github_login>)
   claimsAuthUrl?: string
   discord?: string
+  /**
+   * Tracking convention for this atlas:
+   * - `default` — classic chaos-viewer (optional matchProvenance)
+   * - `experimental` — require how-records on matched funcs + MATCH_RESULT prompts
+   */
+  convention?: string
 }
 
 interface ChaosDb {
@@ -93,6 +111,8 @@ function _repoName(gh?: string | null) { return gh ? gh.replace(/\/+$/, '').spli
 const LINK_REPO = _param('repo') ? decodeURIComponent(_param('repo')!) : null
 const LINK_BRANCH = _param('branch') ? decodeURIComponent(_param('branch')!) : null
 const LINK_DISCORD = _param('discord') ? decodeURIComponent(_param('discord')!) : null
+// ?convention=experimental | default — overrides atlas project.convention
+const LINK_CONVENTION = _param('convention') ? decodeURIComponent(_param('convention')!) : null
 // URL to a project's published chaos-db.json (its own generated data). This is what
 // makes the hosted viewer work for ANY project: point it at that project's data file.
 const DATA_URL_INIT = _param('data') ? decodeURIComponent(_param('data')!)
@@ -361,11 +381,50 @@ function promptFooter(n: number) {
   return lines.join('\n')
 }
 
+/** Classic prompt, or classic + experimental MATCH_RESULT scaffolding. */
+function buildFullPrompt(
+  items: { fn: ChaosFunction; det: FunctionDetail | null }[],
+  convention: Convention,
+): string {
+  const n = items.length || 1
+  const parts: string[] = [promptHeader(n)]
+  if (convention === 'experimental') {
+    const author = operatorGithubHandle()
+    const sessionScope = n <= 1 ? 'focused' : 'batch'
+    const batchSize = n <= 1 ? 1 : n
+    parts[0] += experimentalHeaderAddon(author, sessionScope, batchSize)
+    for (const { fn, det } of items) {
+      parts.push(promptSection(fn, det))
+      parts.push(
+        experimentalMatchResultBlock(fn, det, author, sessionScope, batchSize),
+      )
+    }
+    parts.push(
+      promptFooter(n) + experimentalFooterAddon(author, sessionScope, batchSize),
+    )
+  } else {
+    for (const { fn, det } of items) {
+      parts.push(promptSection(fn, det))
+    }
+    parts.push(promptFooter(n))
+  }
+  return parts.join('\n\n')
+}
+
 // ---- small components ------------------------------------------------------
 
-function StatusBadge({ fn, lockedBy }: { fn: ChaosFunction; lockedBy?: string }) {
+function StatusBadge({
+  fn,
+  lockedBy,
+  convention = 'default',
+}: {
+  fn: ChaosFunction
+  lockedBy?: string
+  convention?: Convention
+}) {
+  const how = provenanceStatus(convention, fn)
   return (
-    <span className="inline-flex gap-1.5">
+    <span className="inline-flex gap-1.5 items-center flex-wrap">
       {fn.matched
         ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-400/30 text-emerald-800 border border-emerald-600/40">MATCHED</span>
         : fn.div != null
@@ -373,6 +432,26 @@ function StatusBadge({ fn, lockedBy }: { fn: ChaosFunction; lockedBy?: string })
           : fn.floor
             ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-300/30 text-rose-700 border border-rose-500/40" title={fn.floor}>FLOOR</span>
             : <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-300/40 text-slate-700 border border-slate-500/40">UNMATCHED</span>}
+      {fn.matched && fn.author && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-sky-300/40 text-sky-900 border border-sky-600/40 inline-flex items-center gap-1" title={`matched by ${fn.author}`}>
+          <User className="w-3 h-3" /> {fn.author}
+        </span>
+      )}
+      {how.kind === 'present' && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-300/35 text-indigo-900 border border-indigo-600/40" title="matchProvenance (how)">
+          via {how.summary}
+        </span>
+      )}
+      {how.kind === 'required_missing' && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-400/35 text-rose-900 border border-rose-600/50" title="experimental requires matchProvenance on matched functions">
+          via ⚠ missing
+        </span>
+      )}
+      {how.kind === 'incomplete' && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-400/35 text-amber-900 border border-amber-600/50" title="AI needs model + reasoning + harness">
+          via ⚠ incomplete · {how.summary}
+        </span>
+      )}
       {lockedBy && !fn.matched && (
         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet-300/40 text-violet-800 border border-violet-600/40 inline-flex items-center gap-1" title={`claims-locked by ${lockedBy}`}>
           <Lock className="w-3 h-3" /> {lockedBy}
@@ -715,6 +794,23 @@ function App() {
   const [avatars, setAvatars] = useState<string[]>([])
   const [batch, setBatch] = useState<string[]>([])
   const [batchPrompt, setBatchPrompt] = useState<string | null>(null)
+  // Tracking convention: URL > local override > atlas project.convention > default
+  const [conventionOverride, setConventionOverride] = useState<Convention | null>(() => {
+    if (LINK_CONVENTION) return parseConvention(LINK_CONVENTION)
+    try {
+      const s = localStorage.getItem('chaos-convention')
+      return s ? parseConvention(s) : null
+    } catch {
+      return null
+    }
+  })
+  const atlasConvention = parseConvention(db.project?.convention ?? P.convention)
+  const convention: Convention = conventionOverride ?? atlasConvention
+  useEffect(() => {
+    if (conventionOverride) {
+      try { localStorage.setItem('chaos-convention', conventionOverride) } catch { /* ignore */ }
+    }
+  }, [conventionOverride])
   const [claims, setClaims] = useState<Claim[]>([])
   const [claimsStatus, setClaimsStatus] = useState<'loading' | 'live' | 'unavailable'>('loading')
   const [setupOpen, setSetupOpen] = useState(!HAS_BUNDLED_DATA && !DATA_URL_INIT && !LINK_REPO)
@@ -1004,19 +1100,18 @@ function App() {
     }
     let cancelled = false
     ;(async () => {
-      const parts: string[] = [promptHeader(batch.length)]
+      const items: { fn: ChaosFunction; det: FunctionDetail | null }[] = []
       for (const id of batch) {
         const f = byId.get(id)
         if (!f) continue
         const d = await fetchDetail(f.module, f.name)
         if (cancelled) return
-        parts.push(promptSection(f, d))
+        items.push({ fn: f, det: d })
       }
-      parts.push(promptFooter(batch.length))
-      if (!cancelled) setBatchPrompt(parts.join('\n\n'))
+      if (!cancelled) setBatchPrompt(buildFullPrompt(items, convention))
     })()
     return () => { cancelled = true }
-  }, [batch, activeTab])
+  }, [batch, activeTab, convention, byId])
 
   function selectFunction(id: string) {
     setSelectedId(id)
@@ -1056,7 +1151,7 @@ function App() {
   })()
 
   const singlePrompt = selectedFn && batch.length === 0
-    ? [promptHeader(1), promptSection(selectedFn, detail), promptFooter(1)].join('\n\n')
+    ? buildFullPrompt([{ fn: selectedFn, det: detail }], convention)
     : null
   const promptText = batchPrompt ?? singlePrompt
 
@@ -1231,7 +1326,7 @@ function App() {
               </select>
             </div>
 
-            <div className="px-2 pb-2 flex items-center gap-4 text-[11px] text-aero-muted border-b border-white/70 mb-2">
+            <div className="px-2 pb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-aero-muted border-b border-white/70 mb-2">
               <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-aero-text">
                 <input type="checkbox" checked={hideMatched} onChange={e => setHideMatched(e.target.checked)} className="accent-aero-primary" />
                 Hide matched
@@ -1239,6 +1334,18 @@ function App() {
               <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-aero-text">
                 <input type="checkbox" checked={hideUnmatched} onChange={e => setHideUnmatched(e.target.checked)} className="accent-aero-primary" />
                 Hide unmatched
+              </label>
+              <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-aero-text" title="Experimental: MATCH_RESULT prompts + require matchProvenance on matched functions">
+                <input
+                  type="checkbox"
+                  checked={convention === 'experimental'}
+                  onChange={e => setConventionOverride(e.target.checked ? 'experimental' : 'default')}
+                  className="accent-aero-primary"
+                />
+                Experimental
+                {atlasConvention === 'experimental' && !conventionOverride && (
+                  <span className="text-[10px] text-indigo-700">(from atlas)</span>
+                )}
               </label>
             </div>
 
@@ -1429,7 +1536,7 @@ function App() {
                         <div className="text-sm flex items-center gap-2 flex-wrap">
                           Target: <span className="font-mono text-aero-primary">{selectedFn.name}</span>
                           <span className="text-aero-muted">({selectedFn.module} @ 0x{selectedFn.addr.toString(16)}, {selectedFn.size.toLocaleString()} B)</span>
-                          <StatusBadge fn={selectedFn} lockedBy={lockedBy.get(selectedFn.id)} />
+                          <StatusBadge fn={selectedFn} lockedBy={lockedBy.get(selectedFn.id)} convention={convention} />
                           <button onClick={() => toggleBatch(selectedFn.id)} className="aero-button px-2 py-0.5 text-[11px] inline-flex items-center gap-1"><Plus className="w-3 h-3" /> add to batch</button>
                         </div>
                       )}
@@ -1515,7 +1622,7 @@ function App() {
                   <div className="win-body space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="font-semibold mono text-lg flex items-center gap-3">{selectedFn.name} <StatusBadge fn={selectedFn} lockedBy={lockedBy.get(selectedFn.id)} /></div>
+                      <div className="font-semibold mono text-lg flex items-center gap-3 flex-wrap">{selectedFn.name} <StatusBadge fn={selectedFn} lockedBy={lockedBy.get(selectedFn.id)} convention={convention} /></div>
                       <div className="text-xs text-aero-muted mt-0.5">{selectedFn.module} • 0x{selectedFn.addr.toString(16)} • {selectedFn.size.toLocaleString()} bytes{selectedFn.cat ? ` • ${selectedFn.cat}` : ''}</div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1532,6 +1639,34 @@ function App() {
                       <button onClick={() => setSelectedId(null)} className="text-aero-muted hover:text-sky-900"><X className="w-4 h-4" /></button>
                     </div>
                   </div>
+
+                  {(() => {
+                    const st = provenanceStatus(convention, selectedFn)
+                    if (st.kind === 'not_matched' || st.kind === 'optional_missing') return null
+                    if (st.kind === 'present') {
+                      return (
+                        <div className="glass p-2.5 rounded-lg text-xs">
+                          <span className="text-[11px] uppercase tracking-wide text-aero-muted">Matched via (how)</span>
+                          <div className="mt-0.5 font-medium text-indigo-900">{st.summary}</div>
+                          <div className="text-[11px] text-aero-muted mt-0.5">Credit (who) stays on <span className="mono">author</span>{selectedFn.author ? ` = ${selectedFn.author}` : ''}.</div>
+                        </div>
+                      )
+                    }
+                    if (st.kind === 'required_missing') {
+                      return (
+                        <div className="glass p-2.5 rounded-lg text-xs border border-rose-400/40 bg-rose-50/40">
+                          <span className="text-[11px] uppercase tracking-wide text-rose-800">Matched via missing</span>
+                          <div className="mt-0.5 text-rose-900">Experimental requires <span className="mono">matchProvenance</span> on every matched function (human, or ai + model + reasoning + harness).</div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="glass p-2.5 rounded-lg text-xs border border-amber-400/40 bg-amber-50/40">
+                        <span className="text-[11px] uppercase tracking-wide text-amber-900">Matched via incomplete</span>
+                        <div className="mt-0.5 text-amber-950">{st.summary} — AI records need model, reasoning, and harness slugs.</div>
+                      </div>
+                    )
+                  })()}
 
                   <div className="flex flex-wrap gap-4 text-xs">
                     {selectedFn.srcPath && (
