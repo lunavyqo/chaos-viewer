@@ -119,47 +119,15 @@ export async function fetchAttemptsLog(urls: string[]): Promise<{
   return { rows: [], source: null }
 }
 
-/** True if this row is a bank.py auto-echo (not a real human/agent try). */
-export function isBankEchoRow(row: AttemptRow): boolean {
-  if (row.status !== 'matched') return false
-  const note = (row.note || '').trim().toLowerCase()
-  return note === 'banked' || note === 'bank' || note === 'bank.py'
-}
-
-/**
- * Drop bank.py echo rows when a real try already exists.
- *
- * Mental model: one prompt / matching session = one try. `bank.py` used to
- * append an extra status=matched note="banked" (and re-bank doubled it). Those
- * are not separate tries.
- */
-export function dedupeAttemptRows(rows: AttemptRow[]): AttemptRow[] {
-  const chronological = [...rows].sort((a, b) => {
-    const ta = a.loggedAt || a.ts || ''
-    const tb = b.loggedAt || b.ts || ''
-    return ta.localeCompare(tb)
-  })
-  const hasRealTry = chronological.some(r => !isBankEchoRow(r))
-  if (hasRealTry) {
-    return chronological.filter(r => !isBankEchoRow(r))
-  }
-  // Bank-only legacy path: keep a single matched row, not every re-bank.
-  const out: AttemptRow[] = []
-  let keptBanked = false
-  for (const r of chronological) {
-    if (isBankEchoRow(r)) {
-      if (keptBanked) continue
-      keptBanked = true
-    }
-    out.push(r)
-  }
-  return out
-}
-
-/** All rows for one function, chronological, bank-echoes collapsed. */
+/** All rows for one function, chronological. */
 export function rowsForFunction(all: AttemptRow[], functionId: string): AttemptRow[] {
-  const raw = all.filter(r => r.functionId === functionId)
-  return dedupeAttemptRows(raw)
+  return all
+    .filter(r => r.functionId === functionId)
+    .sort((a, b) => {
+      const ta = a.loggedAt || a.ts || ''
+      const tb = b.loggedAt || b.ts || ''
+      return ta.localeCompare(tb)
+    })
 }
 
 /**
