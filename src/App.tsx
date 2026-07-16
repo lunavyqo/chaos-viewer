@@ -1,8 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Search, ChevronRight, X, Link2, FileCode, Lock, RefreshCw, Plus, Minus, Palette, Settings, MessageCircle } from 'lucide-react'
+import { Search, ChevronRight, X, Link2, FileCode, Lock, RefreshCw, Plus, Minus, Palette, Settings, MessageCircle, User } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Treemap } from './components/Treemap'
 import { Bubbles } from './components/Bubbles'
+import { AttemptHistory } from './components/AttemptHistory'
+import {
+  attemptLogUrls,
+  fetchAttemptsLog,
+  rowsForFunction,
+  type AttemptRow,
+} from './attempts'
+import {
+  draftInclusion,
+  isGhidraScaffoldText,
+  loadProvenancePrefs,
+  matchResultBlock,
+  matchResultFooterAddon,
+  matchResultHeaderAddon,
+  operatorGithubHandle,
+  PROVENANCE_HARNESS_PRESETS,
+  PROVENANCE_MODELS,
+  PROVENANCE_REASONING_LEVELS,
+  provenanceModelLabel,
+  provenanceStatus,
+  saveProvenanceHarness,
+  saveProvenanceModel,
+  saveProvenanceReasoning,
+  type DraftPromptOpts,
+  type MatchProvenance,
+  type ProvenanceHarness,
+  type ProvenanceReasoning,
+} from './experimental'
 import './App.css'
 
 interface ChaosFunction {
@@ -19,6 +47,8 @@ interface ChaosFunction {
   floor?: string        // parked reason (documented compiler floor)
   sim?: number          // best coddog opcode similarity (unmatched only)
   sibling?: string      // that best matched sibling's name
+  /** How it was matched (method only). Who stays in `author`. */
+  matchProvenance?: MatchProvenance
 }
 
 interface FunctionDetail {
@@ -293,7 +323,11 @@ function promptHeader(n: number) {
   return lines.join('\n')
 }
 
-function promptSection(fn: ChaosFunction, det: FunctionDetail | null) {
+function promptSection(
+  fn: ChaosFunction,
+  det: FunctionDetail | null,
+  draftOpts?: Pick<DraftPromptOpts, 'includeNearMissDraft' | 'includeGhidraDraft'>,
+) {
   const lines: string[] = []
   lines.push(`${'='.repeat(70)}`)
   lines.push(`FUNCTION: ${fn.name}   module: ${fn.module}   addr: 0x${fn.addr.toString(16)}   size: ${fn.size} bytes`)
@@ -307,13 +341,65 @@ function promptSection(fn: ChaosFunction, det: FunctionDetail | null) {
   if (fn.floor) {
     lines.push(`WARNING: previously parked as "${fn.floor}" - check the sec 6e-6g levers before grinding.`)
   }
-  if (det?.draft) {
+  const nearOn = draftOpts?.includeNearMissDraft !== false
+  const ghidraOn = draftOpts?.includeGhidraDraft !== false
+  const incl = draftInclusion(det, draftOpts)
+
+  // Always state USE/DON'T USE in the function block (not only global policy).
+  lines.push(``)
+  lines.push(
+    `DRAFTS FOR THIS FUNCTION: near-miss ${nearOn ? 'USE (allowed)' : 'DO NOT USE'} · ` +
+      `Ghidra ${ghidraOn ? 'USE (allowed)' : 'DO NOT USE'}`,
+  )
+
+  if (incl.text && incl.nearMiss) {
+    const divBit =
+      incl.draftDiv != null
+        ? `${incl.draftDiv} instruction(s) from matching`
+        : 'stored near-miss / NONMATCHING C'
     lines.push(``)
-    lines.push(`A NEAR-MISS DRAFT EXISTS (${det.draftDiv} instruction(s) from matching) - START FROM THIS, do not re-decompile:`)
+    lines.push(
+      `NEAR-MISS DRAFT — INCLUDED BELOW. USE IT as the starting C (${divBit}). ` +
+        `Do not re-decompile from scratch. Still VERIFY to MATCH. ` +
+        `You may also open related // NONMATCHING / scratch under src/ for this function only.`,
+    )
     lines.push('```c')
-    lines.push(det.draft.trimEnd())
+    lines.push(incl.text)
     lines.push('```')
+  } else if (nearOn) {
+    lines.push(
+      `NEAR-MISS: USE is allowed, but no near-miss C was attached in this prompt ` +
+        `(no detail draft, or draft is Ghidra-only). You may open local nearmiss/db.jsonl, NONMATCHING/scratch ` +
+        `for this function if it exists; otherwise start from disasm.`,
+    )
+  } else {
+    lines.push(
+      `NEAR-MISS: DO NOT USE — C not included below. Do NOT open src/** NONMATCHING, ` +
+        `scratch/, or other near-miss tips for this function even if present on disk.`,
+    )
   }
+
+  if (incl.text && incl.ghidra) {
+    lines.push(``)
+    lines.push(
+      `GHIDRA DECOMPILER DRAFT — INCLUDED BELOW. USE IT for structure/types/callees only ` +
+        `(approximate — NOT a match). REWRITE until verify MATCH. Local ghidra_out/ also OK.`,
+    )
+    lines.push('```c')
+    lines.push(incl.text)
+    lines.push('```')
+  } else if (ghidraOn) {
+    lines.push(
+      `GHIDRA: USE is allowed, but no Ghidra scaffold was attached in this prompt. ` +
+        `You may open local ghidra_out/0x….c for this addr if it exists; else ignore Ghidra.`,
+    )
+  } else {
+    lines.push(
+      `GHIDRA: DO NOT USE — scaffold not included below. Do NOT open ghidra_out/ or ` +
+        `GHIDRA SCAFFOLD files for this function even if present on disk.`,
+    )
+  }
+
   if (det?.disasm?.length) {
     const MAXD = 90
     const truncated = det.disasm.length > MAXD
@@ -334,7 +420,10 @@ function promptSection(fn: ChaosFunction, det: FunctionDetail | null) {
   return lines.join('\n')
 }
 
-function promptFooter(n: number) {
+function promptFooter(
+  n: number,
+  draftOpts?: Pick<DraftPromptOpts, 'includeNearMissDraft' | 'includeGhidraDraft'>,
+) {
   const lines = [``]
   if (P.rules) lines.push(`Rules: ${P.rules}`)
   // signed-in users' prompts carry their claims session token so the assistant
@@ -357,15 +446,91 @@ function promptFooter(n: number) {
     `Matched means byte-identical - iterate until the verify command reports a MATCH${n > 1 ? ' for each function, one at a time (verify before moving on)' : ''}.`,
     `When it matches, fork the repo and open a pull request${target} against its default branch`,
     `(one function or a small related family per PR; note the compiler version and the function address).`)
-  if (P.nearMissNote) lines.push(``, P.nearMissNote)
+  // Only include near-miss operator note when near-miss drafts are enabled for this prompt.
+  if (P.nearMissNote && draftOpts?.includeNearMissDraft !== false) {
+    lines.push(``, P.nearMissNote)
+  }
+  lines.push(``, draftPolicyBlock(draftOpts))
   return lines.join('\n')
+}
+
+/**
+ * Operator policy for drafts: toggles must bind the agent even when it has
+ * local_repo access (src/, scratch/, ghidra_out/) — not only whether C is pasted.
+ */
+function draftPolicyBlock(
+  draftOpts?: Pick<DraftPromptOpts, 'includeNearMissDraft' | 'includeGhidraDraft'>,
+): string {
+  const nearOn = draftOpts?.includeNearMissDraft !== false
+  const ghidraOn = draftOpts?.includeGhidraDraft !== false
+  return [
+    `======================================================================`,
+    `DRAFT POLICY (operator toggles — two effects each)`,
+    `======================================================================`,
+    `1) PROMPT BODY: near-miss / Ghidra C is either INCLUDED below or NOT.`,
+    `2) WORK RULES: you MUST / MUST NOT use those sources (including local files).`,
+    ``,
+    `Near-miss / NONMATCHING: ${nearOn ? 'INCLUDE when available + YOU MUST USE (allowed)' : 'NOT included + YOU MUST NOT USE (forbidden on disk too)'}`,
+    `Ghidra scaffolds:        ${ghidraOn ? 'INCLUDE when available + YOU MUST USE (allowed)' : 'NOT included + YOU MUST NOT USE (forbidden on disk too)'}`,
+    ``,
+    nearOn
+      ? `NEAR-MISS ON: Prefer C blocks marked "NEAR-MISS DRAFT — INCLUDED". You may also open nearmiss/db.jsonl tips, // NONMATCHING, or scratch for these functions. Still VERIFY to MATCH.`
+      : `NEAR-MISS OFF: No near-miss C is pasted. Do NOT open nearmiss/db.jsonl, src/** NONMATCHING, scratch/, or similar tips — even if the repo has them.`,
+    ghidraOn
+      ? `GHIDRA ON: Prefer blocks marked "GHIDRA … INCLUDED". Local ghidra_out/ OK as extra hint. Rewrite until verify MATCH; never bank decompiler C as-is.`
+      : `GHIDRA OFF: No Ghidra C is pasted. Do NOT open ghidra_out/ or GHIDRA SCAFFOLD files — even if present.`,
+    ``,
+    `If both OFF: fresh try from TARGET DISASSEMBLY only.`,
+    `MATCH_RESULT usedNearMissDraft / usedGhidraDraft must match what you actually used (and policy).`,
+  ].join('\n')
+}
+
+/** Match prompt with MATCH_RESULT attempt-tree scaffolding (this fork always). */
+function buildFullPrompt(
+  items: { fn: ChaosFunction; det: FunctionDetail | null }[],
+  draftOpts?: DraftPromptOpts,
+): string {
+  const n = items.length || 1
+  const author = operatorGithubHandle()
+  const sessionScope = n <= 1 ? 'focused' : 'batch'
+  const batchSize = n <= 1 ? 1 : n
+  const prefs = loadProvenancePrefs()
+  const opts: DraftPromptOpts = {
+    includeNearMissDraft: draftOpts?.includeNearMissDraft !== false,
+    includeGhidraDraft: draftOpts?.includeGhidraDraft !== false,
+    model: draftOpts?.model?.trim() || prefs.model,
+    reasoning: draftOpts?.reasoning?.trim() || prefs.reasoning,
+    harness: draftOpts?.harness?.trim() || prefs.harness,
+  }
+  // Policy first (after header) so agents see DO/DON'T before any C or paths.
+  const parts: string[] = [
+    promptHeader(n) +
+      '\n\n' +
+      draftPolicyBlock(opts) +
+      matchResultHeaderAddon(author, sessionScope, batchSize),
+  ]
+  for (const { fn, det } of items) {
+    parts.push(promptSection(fn, det, opts))
+    parts.push(matchResultBlock(fn, det, author, sessionScope, batchSize, opts))
+  }
+  parts.push(
+    promptFooter(n, opts) + matchResultFooterAddon(author, sessionScope, batchSize),
+  )
+  return parts.join('\n\n')
 }
 
 // ---- small components ------------------------------------------------------
 
-function StatusBadge({ fn, lockedBy }: { fn: ChaosFunction; lockedBy?: string }) {
+function StatusBadge({
+  fn,
+  lockedBy,
+}: {
+  fn: ChaosFunction
+  lockedBy?: string
+}) {
+  const how = provenanceStatus(fn)
   return (
-    <span className="inline-flex gap-1.5">
+    <span className="inline-flex gap-1.5 items-center flex-wrap">
       {fn.matched
         ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-400/30 text-emerald-800 border border-emerald-600/40">MATCHED</span>
         : fn.div != null
@@ -373,6 +538,26 @@ function StatusBadge({ fn, lockedBy }: { fn: ChaosFunction; lockedBy?: string })
           : fn.floor
             ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-300/30 text-rose-700 border border-rose-500/40" title={fn.floor}>FLOOR</span>
             : <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-300/40 text-slate-700 border border-slate-500/40">UNMATCHED</span>}
+      {fn.matched && fn.author && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-sky-300/40 text-sky-900 border border-sky-600/40 inline-flex items-center gap-1" title={`matched by ${fn.author}`}>
+          <User className="w-3 h-3" /> {fn.author}
+        </span>
+      )}
+      {how.kind === 'present' && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-300/35 text-indigo-900 border border-indigo-600/40" title="matchProvenance (how)">
+          via {how.summary}
+        </span>
+      )}
+      {how.kind === 'required_missing' && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-400/35 text-rose-900 border border-rose-600/50" title="matched functions need matchProvenance (how)">
+          via ⚠ missing
+        </span>
+      )}
+      {how.kind === 'incomplete' && (
+        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-400/35 text-amber-900 border border-amber-600/50" title="AI needs model + reasoning + harness">
+          via ⚠ incomplete · {how.summary}
+        </span>
+      )}
       {lockedBy && !fn.matched && (
         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet-300/40 text-violet-800 border border-violet-600/40 inline-flex items-center gap-1" title={`claims-locked by ${lockedBy}`}>
           <Lock className="w-3 h-3" /> {lockedBy}
@@ -697,6 +882,41 @@ function App() {
     return () => { cancelled = true }
   }, [])
   const hasUsableData = HAS_BUNDLED_DATA || (!!dataUrl && !dataError && !dataLoading)
+
+  // Experimental attempt log (match_attempts.jsonl) — whole file cached per project.
+  const [attemptRows, setAttemptRows] = useState<AttemptRow[]>([])
+  const [attemptSource, setAttemptSource] = useState<string | null>(null)
+  const [attemptLoading, setAttemptLoading] = useState(false)
+  const [attemptError, setAttemptError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!hasUsableData) return
+    const urls = attemptLogUrls({
+      dataUrl,
+      github: P.github || db.project?.github,
+      branch: LINK_BRANCH,
+    })
+    if (!urls.length) {
+      setAttemptRows([])
+      setAttemptSource(null)
+      setAttemptError(null)
+      return
+    }
+    let cancelled = false
+    setAttemptLoading(true)
+    setAttemptError(null)
+    fetchAttemptsLog(urls).then(({ rows, source }) => {
+      if (cancelled) return
+      setAttemptRows(rows)
+      setAttemptSource(source)
+      setAttemptLoading(false)
+      if (!source) setAttemptError('no match_attempts.jsonl found next to atlas or on the repo')
+    })
+    return () => {
+      cancelled = true
+    }
+    // re-fetch when atlas URL or project github changes
+  }, [hasUsableData, dataUrl, db.project?.github, db.generatedAt])
+
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -715,6 +935,52 @@ function App() {
   const [avatars, setAvatars] = useState<string[]>([])
   const [batch, setBatch] = useState<string[]>([])
   const [batchPrompt, setBatchPrompt] = useState<string | null>(null)
+  // Prompt draft toggles (parity with chaos CLI d / h). Default on.
+  const [includeNearMissDraft, setIncludeNearMissDraft] = useState(() => {
+    try { return localStorage.getItem('chaos-prompt-near-miss') !== '0' } catch { return true }
+  })
+  const [includeGhidraDraft, setIncludeGhidraDraft] = useState(() => {
+    try { return localStorage.getItem('chaos-prompt-ghidra') !== '0' } catch { return true }
+  })
+  // Provenance pickers (parity with chaos CLI m / y / w) — prefill MATCH_RESULT.
+  const [provenanceModel, setProvenanceModel] = useState(() => loadProvenancePrefs().model)
+  const [provenanceReasoning, setProvenanceReasoning] = useState<ProvenanceReasoning>(
+    () => loadProvenancePrefs().reasoning,
+  )
+  const [provenanceHarness, setProvenanceHarness] = useState<ProvenanceHarness>(
+    () => loadProvenancePrefs().harness,
+  )
+  useEffect(() => {
+    try { localStorage.setItem('chaos-prompt-near-miss', includeNearMissDraft ? '1' : '0') } catch { /* ignore */ }
+  }, [includeNearMissDraft])
+  useEffect(() => {
+    try { localStorage.setItem('chaos-prompt-ghidra', includeGhidraDraft ? '1' : '0') } catch { /* ignore */ }
+  }, [includeGhidraDraft])
+  useEffect(() => {
+    saveProvenanceModel(provenanceModel)
+  }, [provenanceModel])
+  useEffect(() => {
+    saveProvenanceReasoning(provenanceReasoning)
+  }, [provenanceReasoning])
+  useEffect(() => {
+    saveProvenanceHarness(provenanceHarness)
+  }, [provenanceHarness])
+  const draftOpts = useMemo(
+    () => ({
+      includeNearMissDraft,
+      includeGhidraDraft,
+      model: provenanceModel,
+      reasoning: provenanceReasoning,
+      harness: provenanceHarness,
+    }),
+    [
+      includeNearMissDraft,
+      includeGhidraDraft,
+      provenanceModel,
+      provenanceReasoning,
+      provenanceHarness,
+    ],
+  )
   const [claims, setClaims] = useState<Claim[]>([])
   const [claimsStatus, setClaimsStatus] = useState<'loading' | 'live' | 'unavailable'>('loading')
   const [setupOpen, setSetupOpen] = useState(!HAS_BUNDLED_DATA && !DATA_URL_INIT && !LINK_REPO)
@@ -1004,19 +1270,18 @@ function App() {
     }
     let cancelled = false
     ;(async () => {
-      const parts: string[] = [promptHeader(batch.length)]
+      const items: { fn: ChaosFunction; det: FunctionDetail | null }[] = []
       for (const id of batch) {
         const f = byId.get(id)
         if (!f) continue
         const d = await fetchDetail(f.module, f.name)
         if (cancelled) return
-        parts.push(promptSection(f, d))
+        items.push({ fn: f, det: d })
       }
-      parts.push(promptFooter(batch.length))
-      if (!cancelled) setBatchPrompt(parts.join('\n\n'))
+      if (!cancelled) setBatchPrompt(buildFullPrompt(items, draftOpts))
     })()
     return () => { cancelled = true }
-  }, [batch, activeTab])
+  }, [batch, activeTab, byId, draftOpts])
 
   function selectFunction(id: string) {
     setSelectedId(id)
@@ -1056,9 +1321,16 @@ function App() {
   })()
 
   const singlePrompt = selectedFn && batch.length === 0
-    ? [promptHeader(1), promptSection(selectedFn, detail), promptFooter(1)].join('\n\n')
+    ? buildFullPrompt([{ fn: selectedFn, det: detail }], draftOpts)
     : null
   const promptText = batchPrompt ?? singlePrompt
+
+  // Whether the selected detail currently has a draft of each kind (for toggle labels).
+  const selectedDraftKind = detail?.draft
+    ? isGhidraScaffoldText(detail.draft)
+      ? 'ghidra'
+      : 'near-miss'
+    : null
 
   // hand the prompt to the user's own Claude: web chat, desktop app, or terminal
   function openInClaude(target: 'web' | 'app' | 'code' | 'vscode' | 'grok' | 'cursor') {
@@ -1231,7 +1503,7 @@ function App() {
               </select>
             </div>
 
-            <div className="px-2 pb-2 flex items-center gap-4 text-[11px] text-aero-muted border-b border-white/70 mb-2">
+            <div className="px-2 pb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-aero-muted border-b border-white/70 mb-2">
               <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-aero-text">
                 <input type="checkbox" checked={hideMatched} onChange={e => setHideMatched(e.target.checked)} className="accent-aero-primary" />
                 Hide matched
@@ -1395,6 +1667,91 @@ function App() {
               {activeTab === 'prompt' && (
                 <div>
                   <div className="font-medium mb-2">Prompt Builder: paste into Claude Code (or any assistant) and go</div>
+                  <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-aero-muted">
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-aero-text" title="Include stored near-miss / NONMATCHING C from details (chaos CLI: d)">
+                      <input
+                        type="checkbox"
+                        checked={includeNearMissDraft}
+                        onChange={e => setIncludeNearMissDraft(e.target.checked)}
+                        className="accent-aero-primary"
+                      />
+                      Near-miss draft
+                      {selectedDraftKind === 'near-miss' && (
+                        <span className="text-[10px] text-amber-800">(available)</span>
+                      )}
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-aero-text" title="Include Ghidra-tagged decompiler scaffold from details (chaos CLI: h). Local ghidra_out/ is CLI-only.">
+                      <input
+                        type="checkbox"
+                        checked={includeGhidraDraft}
+                        onChange={e => setIncludeGhidraDraft(e.target.checked)}
+                        className="accent-aero-primary"
+                      />
+                      Ghidra draft
+                      {selectedDraftKind === 'ghidra' && (
+                        <span className="text-[10px] text-indigo-800">(available)</span>
+                      )}
+                    </label>
+                    {!includeNearMissDraft && !includeGhidraDraft && (
+                      <span className="text-[10px]">disasm-only · fresh match from target listing</span>
+                    )}
+                  </div>
+                  {/* Provenance pickers — same fixed lists as chaos CLI (m / y / w). Prefill MATCH_RESULT. */}
+                  <div className="mb-3 flex flex-wrap items-end gap-x-3 gap-y-2 text-[11px]">
+                    <label className="flex flex-col gap-0.5 min-w-[10rem]">
+                      <span className="text-aero-muted uppercase tracking-wide text-[10px]" title="chaos CLI: m">
+                        Model
+                      </span>
+                      <select
+                        value={provenanceModel}
+                        onChange={e => setProvenanceModel(e.target.value)}
+                        className="bg-sky-900/5 border border-white/70 rounded px-1.5 py-0.5 outline-none text-aero-text text-[11px] max-w-[14rem]"
+                      >
+                        {PROVENANCE_MODELS.map(m => (
+                          <option key={m.slug} value={m.slug}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-0.5 min-w-[7rem]">
+                      <span className="text-aero-muted uppercase tracking-wide text-[10px]" title="Thinking / effort — chaos CLI: y">
+                        Reasoning
+                      </span>
+                      <select
+                        value={provenanceReasoning}
+                        onChange={e => setProvenanceReasoning(e.target.value as ProvenanceReasoning)}
+                        className="bg-sky-900/5 border border-white/70 rounded px-1.5 py-0.5 outline-none text-aero-text text-[11px]"
+                      >
+                        {PROVENANCE_REASONING_LEVELS.map(r => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-0.5 min-w-[8rem]">
+                      <span className="text-aero-muted uppercase tracking-wide text-[10px]" title="chaos CLI: w">
+                        Harness
+                      </span>
+                      <select
+                        value={provenanceHarness}
+                        onChange={e => setProvenanceHarness(e.target.value as ProvenanceHarness)}
+                        className="bg-sky-900/5 border border-white/70 rounded px-1.5 py-0.5 outline-none text-aero-text text-[11px]"
+                      >
+                        {PROVENANCE_HARNESS_PRESETS.map(h => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="text-[10px] text-aero-muted pb-1 max-w-xs leading-snug">
+                      Prefills <code className="text-[10px]">matchProvenance</code> in the prompt
+                      ({provenanceModelLabel(provenanceModel)} · {provenanceReasoning} · {provenanceHarness}).
+                      Saved in this browser.
+                    </div>
+                  </div>
 
                   {batch.length > 0 && (
                     <div className="mb-3 flex flex-wrap items-center gap-1.5">
@@ -1515,7 +1872,7 @@ function App() {
                   <div className="win-body space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="font-semibold mono text-lg flex items-center gap-3">{selectedFn.name} <StatusBadge fn={selectedFn} lockedBy={lockedBy.get(selectedFn.id)} /></div>
+                      <div className="font-semibold mono text-lg flex items-center gap-3 flex-wrap">{selectedFn.name} <StatusBadge fn={selectedFn} lockedBy={lockedBy.get(selectedFn.id)} /></div>
                       <div className="text-xs text-aero-muted mt-0.5">{selectedFn.module} • 0x{selectedFn.addr.toString(16)} • {selectedFn.size.toLocaleString()} bytes{selectedFn.cat ? ` • ${selectedFn.cat}` : ''}</div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1532,6 +1889,34 @@ function App() {
                       <button onClick={() => setSelectedId(null)} className="text-aero-muted hover:text-sky-900"><X className="w-4 h-4" /></button>
                     </div>
                   </div>
+
+                  {(() => {
+                    const st = provenanceStatus(selectedFn)
+                    if (st.kind === 'not_matched') return null
+                    if (st.kind === 'present') {
+                      return (
+                        <div className="glass p-2.5 rounded-lg text-xs">
+                          <span className="text-[11px] uppercase tracking-wide text-aero-muted">Matched via (how)</span>
+                          <div className="mt-0.5 font-medium text-indigo-900">{st.summary}</div>
+                          <div className="text-[11px] text-aero-muted mt-0.5">Credit (who) stays on <span className="mono">author</span>{selectedFn.author ? ` = ${selectedFn.author}` : ''}.</div>
+                        </div>
+                      )
+                    }
+                    if (st.kind === 'required_missing') {
+                      return (
+                        <div className="glass p-2.5 rounded-lg text-xs border border-rose-400/40 bg-rose-50/40">
+                          <span className="text-[11px] uppercase tracking-wide text-rose-800">Matched via missing</span>
+                          <div className="mt-0.5 text-rose-900">Every matched function needs <span className="mono">matchProvenance</span> (human, or ai + model + reasoning + harness).</div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="glass p-2.5 rounded-lg text-xs border border-amber-400/40 bg-amber-50/40">
+                        <span className="text-[11px] uppercase tracking-wide text-amber-900">Matched via incomplete</span>
+                        <div className="mt-0.5 text-amber-950">{st.summary} — AI records need model, reasoning, and harness slugs.</div>
+                      </div>
+                    )
+                  })()}
 
                   <div className="flex flex-wrap gap-4 text-xs">
                     {selectedFn.srcPath && (
@@ -1581,6 +1966,17 @@ function App() {
                     </div>
                   )}
                   {!detail && <div className="text-[11px] text-aero-muted">loading details…</div>}
+
+                  <AttemptHistory
+                    rows={rowsForFunction(attemptRows, selectedFn.id)}
+                    source={attemptSource}
+                    loading={attemptLoading}
+                    error={
+                      attemptError && !attemptLoading && !rowsForFunction(attemptRows, selectedFn.id).length
+                        ? attemptError
+                        : null
+                    }
+                  />
                   </div>
                 </motion.div>
               )}
