@@ -118,11 +118,11 @@ ATTEMPT TREE (required mental model — not a flat list of anonymous tries):
 
   IDENTITY (required every try — without this the log cannot be queried later):
   - functionId  = atlas function.id (e.g. module:0xaddr). Stable key.
-  - attemptId   = unique id for THIS node. Prefer ULID/UUID (or
-    "<functionId>-<utc>-<4hex>"). NEVER reuse. NEVER "a1"/"try2".
+  - attemptId   = unique id for THIS node. Prefer ULID/UUID. NEVER reuse.
+    NEVER "a1"/"try2". Do not embed wall-clock times in ids.
   - parentAttemptId = attemptId of the node you built on, or null for a new root.
-  - loggedAt    = ISO-8601 UTC when this try finished (e.g. 2026-07-15T12:00:00Z).
   - schemaVersion = 1  (bump only when field meanings change).
+  - Privacy: do NOT record loggedAt, ts, or any wall-clock finish time.
 
   Rules:
   - First try for a function: parentAttemptId = null, base.kind = scratch
@@ -374,7 +374,6 @@ MATCH_RESULT:
   size: ${fn.size}
   attemptId: "01JEXAMPLE0000000000000000"  # UNIQUE this node: ULID/UUID (never a1/try2)
   parentAttemptId: null         # null = new root; else a real prior attemptId for this functionId
-  loggedAt: "2026-07-15T12:00:00Z"  # ISO-8601 UTC when this try finished
   status: no_progress   # matched | near_miss | no_progress | compile_error | failed | skipped
   # --- attempt tree base ---
   base:

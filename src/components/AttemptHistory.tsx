@@ -17,7 +17,6 @@ import type { AttemptRow, AttemptTreeNode } from '../attempts'
 import {
   attemptHowLine,
   buildAttemptForest,
-  formatAttemptWhen,
   shortAttemptId,
 } from '../attempts'
 
@@ -129,7 +128,6 @@ function AttemptCard({
 }) {
   const { row } = node
   const kind = statusKind(row.status)
-  const when = formatAttemptWhen(row)
   const how = attemptHowLine(row)
   const hasKids = node.children.length > 0
 
@@ -199,7 +197,6 @@ function AttemptCard({
           )}
 
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10.5px] text-aero-muted mono">
-            {when && <span>{when}</span>}
             <span title={row.attemptId || undefined}>
               {shortAttemptId(row.attemptId)}
               {row.parentAttemptId
