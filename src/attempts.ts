@@ -13,8 +13,6 @@ export type AttemptRow = {
   id?: string
   attemptId?: string
   parentAttemptId?: string | null
-  loggedAt?: string
-  ts?: string
   module?: string
   addr?: number | string
   name?: string
@@ -119,26 +117,28 @@ export async function fetchAttemptsLog(urls: string[]): Promise<{
   return { rows: [], source: null }
 }
 
-/** All rows for one function, chronological. */
+/** Stable order without wall-clock times (privacy — no loggedAt/ts). */
+function attemptOrderKey(row: AttemptRow): string {
+  return row.attemptId || row.functionId || ''
+}
+
+/** All rows for one function, ordered by attemptId (no wall-clock sort). */
 export function rowsForFunction(all: AttemptRow[], functionId: string): AttemptRow[] {
   return all
     .filter(r => r.functionId === functionId)
-    .sort((a, b) => {
-      const ta = a.loggedAt || a.ts || ''
-      const tb = b.loggedAt || b.ts || ''
-      return ta.localeCompare(tb)
-    })
+    .sort((a, b) => attemptOrderKey(a).localeCompare(attemptOrderKey(b)))
 }
 
 /**
  * Build forest of attempt trees. Parent links by attemptId; orphans become roots.
- * Chronological siblings under each parent.
+ * Siblings ordered by attemptId (no wall-clock times).
  */
 export function buildAttemptForest(rows: AttemptRow[]): AttemptTreeNode[] {
   if (!rows.length) return []
   const byId = new Map<string, AttemptTreeNode>()
+  let anon = 0
   for (const row of rows) {
-    const id = row.attemptId || `${row.functionId}:${row.loggedAt || row.ts || Math.random()}`
+    const id = row.attemptId || `${row.functionId}:anon-${anon++}`
     byId.set(id, { row: { ...row, attemptId: id }, children: [] })
   }
   const roots: AttemptTreeNode[] = []
@@ -151,11 +151,9 @@ export function buildAttemptForest(rows: AttemptRow[]): AttemptTreeNode[] {
     }
   }
   const sortRec = (nodes: AttemptTreeNode[]) => {
-    nodes.sort((a, b) => {
-      const ta = a.row.loggedAt || a.row.ts || ''
-      const tb = b.row.loggedAt || b.row.ts || ''
-      return ta.localeCompare(tb)
-    })
+    nodes.sort((a, b) =>
+      attemptOrderKey(a.row).localeCompare(attemptOrderKey(b.row)),
+    )
     for (const n of nodes) sortRec(n.children)
   }
   sortRec(roots)
@@ -165,18 +163,6 @@ export function buildAttemptForest(rows: AttemptRow[]): AttemptTreeNode[] {
 export function shortAttemptId(id?: string | null): string {
   if (!id) return '?'
   return id.length > 10 ? id.slice(0, 8) : id
-}
-
-export function formatAttemptWhen(row: AttemptRow): string {
-  const raw = row.loggedAt || row.ts
-  if (!raw) return ''
-  try {
-    const d = new Date(raw)
-    if (Number.isNaN(d.getTime())) return raw
-    return d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')
-  } catch {
-    return raw
-  }
 }
 
 export function attemptStatusLabel(row: AttemptRow): string {

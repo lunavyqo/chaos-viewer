@@ -118,11 +118,11 @@ ATTEMPT TREE (required mental model — not a flat list of anonymous tries):
 
   IDENTITY (required every try — without this the log cannot be queried later):
   - functionId  = atlas function.id (e.g. module:0xaddr). Stable key.
-  - attemptId   = unique id for THIS node. Prefer ULID/UUID (or
-    "<functionId>-<utc>-<4hex>"). NEVER reuse. NEVER "a1"/"try2".
+  - attemptId   = unique id for THIS node. Prefer ULID/UUID. NEVER reuse.
+    NEVER "a1"/"try2". Do not embed wall-clock times in ids.
   - parentAttemptId = attemptId of the node you built on, or null for a new root.
-  - loggedAt    = ISO-8601 UTC when this try finished (e.g. 2026-07-15T12:00:00Z).
   - schemaVersion = 1  (bump only when field meanings change).
+  - Privacy: do NOT record loggedAt, ts, or any wall-clock finish time.
 
   Rules:
   - First try for a function: parentAttemptId = null, base.kind = scratch
@@ -374,7 +374,6 @@ MATCH_RESULT:
   size: ${fn.size}
   attemptId: "01JEXAMPLE0000000000000000"  # UNIQUE this node: ULID/UUID (never a1/try2)
   parentAttemptId: null         # null = new root; else a real prior attemptId for this functionId
-  loggedAt: "2026-07-15T12:00:00Z"  # ISO-8601 UTC when this try finished
   status: no_progress   # matched | near_miss | no_progress | compile_error | failed | skipped
   # --- attempt tree base ---
   base:
@@ -420,7 +419,7 @@ BEFORE YOU FINISH
 ======================================================================
 1. For EACH function, emit a filled MATCH_RESULT **node** for this try.
 2. Identity (required): schemaVersion=1, functionId (atlas id), unique attemptId
-   (ULID/UUID — never a1/try2), parentAttemptId, loggedAt (UTC ISO-8601), base.
+   (ULID/UUID — never a1/try2), parentAttemptId, base. Do NOT log wall-clock times.
 3. Draft trackers (required, independent): usedNearMissDraft and usedGhidraDraft.
    Pre-filled from this prompt; INHERIT true from parentAttemptId's node if the
    parent had that flag true.
@@ -439,7 +438,7 @@ ${authorRule}
    it did NOT beat prevBestDivergences (improvedNearMiss: false).
 9. Operators append every MATCH_RESULT into config/match_attempts.jsonl
    (tools/log_attempt.py or equivalent). Preserve functionId / attemptId /
-   parentAttemptId / loggedAt / base / usedNearMissDraft / usedGhidraDraft.
+   parentAttemptId / base / usedNearMissDraft / usedGhidraDraft. Never log loggedAt/ts.
 10. Open a PR when matched; PR author should match \`author\`.
 
 Refuse to claim "matched" without verify succeeding.
