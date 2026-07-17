@@ -10,7 +10,7 @@ export interface MatchProvenance {
   kind: 'human' | 'ai'
   /** AI model slug (e.g. grok-4.5). Required for complete AI records. */
   model?: string
-  /** Reasoning / effort: high | xhigh | max | medium | low | none */
+  /** Reasoning / effort (highest first): max | xhigh | high | medium | low | none */
   reasoning?: string
   /** Harness slug: grok-build, cursor-agent, … */
   harness?: string
@@ -215,7 +215,7 @@ ${authorLine}
 TOKEN RULES for matchProvenance (ai):
   - model:   GOOD: grok-4.5  claude-opus-4   BAD: "Grok 4.5"
   - harness: GOOD: grok-build  cursor-agent  BAD: "Grok Build"
-  - reasoning: high | xhigh | max | medium | low | none
+  - reasoning: max | xhigh | high | medium | low | none  (max is highest)
   Do NOT put the operator name in matchProvenance (no \`by\` field).
 
 Do NOT invent a match. VERIFY until MATCH.
@@ -259,9 +259,9 @@ export const PROVENANCE_MODELS: { slug: string; label: string }[] = [
 
 /** Reasoning / “thinking initiative” levels (CLI Prompt `y`). */
 export const PROVENANCE_REASONING_LEVELS = [
-  'high',
-  'xhigh',
   'max',
+  'xhigh',
+  'high',
   'medium',
   'low',
   'none',
@@ -428,7 +428,7 @@ MATCH_RESULT:
   matchProvenance:
     kind: ai                    # ai | human
     model: "${model}"            # slug; NOT display names like "Grok 4.5"
-    reasoning: "${reasoning}"    # high | xhigh | max | medium | low | none
+    reasoning: "${reasoning}"    # max | xhigh | high | medium | low | none
     harness: "${harness}"        # slug; NOT display names like "Grok Build"
   divergences: null
   prevBestDivergences: null
