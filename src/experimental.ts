@@ -36,14 +36,52 @@ export interface ExpDetail {
   draftDiv?: number
 }
 
-export function provenanceSummary(p: MatchProvenance): string {
-  if (p.kind === 'human') {
-    return p.note && p.note.trim() ? `human · ${p.note.trim()}` : 'human'
+/**
+ * Compact how line for UI — values only, no model=/harness= keys.
+ * AI example: "Grok 4.5 (high) · grok-build"
+ */
+export function formatHowDisplay(opts: {
+  kind?: string | null
+  model?: string | null
+  reasoning?: string | null
+  harness?: string | null
+  note?: string | null
+}): string {
+  const kind = (opts.kind || '').trim().toLowerCase()
+  if (kind === 'human') {
+    const note = opts.note?.trim()
+    return note ? `human · ${note}` : 'human'
   }
-  const parts = [`ai · model=${p.model || '?'}`]
-  if (p.reasoning) parts.push(`reasoning=${p.reasoning}`)
-  if (p.harness) parts.push(`harness=${p.harness}`)
-  return parts.join(' · ')
+  const modelSlug = opts.model?.trim() || ''
+  const reasoning = opts.reasoning?.trim() || ''
+  const harness = opts.harness?.trim() || ''
+  if (!modelSlug && !reasoning && !harness) {
+    return kind === 'ai' ? 'ai' : kind
+  }
+  // Prefer known labels (Grok 4.5); unknown slugs → spaces not dashes
+  let modelLabel = ''
+  if (modelSlug) {
+    const known = provenanceModelLabel(modelSlug)
+    modelLabel = known !== modelSlug ? known : modelSlug.replace(/-/g, ' ')
+  }
+  const modelPart = modelLabel
+    ? reasoning
+      ? `${modelLabel} (${reasoning})`
+      : modelLabel
+    : kind === 'ai'
+      ? 'ai'
+      : ''
+  return [modelPart, harness].filter(Boolean).join(' · ')
+}
+
+export function provenanceSummary(p: MatchProvenance): string {
+  return formatHowDisplay({
+    kind: p.kind,
+    model: p.model,
+    reasoning: p.reasoning,
+    harness: p.harness,
+    note: p.note,
+  })
 }
 
 /** AI records need model + reasoning + harness; human only needs kind. */

@@ -543,19 +543,16 @@ function StatusBadge({
           <User className="w-3 h-3" /> {fn.author}
         </span>
       )}
-      {how.kind === 'present' && (
-        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-300/35 text-indigo-900 border border-indigo-600/40" title="matchProvenance (how)">
-          via {how.summary}
-        </span>
-      )}
+      {/* How (model/harness) lives in attempt history — not duplicated here.
+          Keep only data-quality warnings when provenance is missing/incomplete. */}
       {how.kind === 'required_missing' && (
         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-400/35 text-rose-900 border border-rose-600/50" title="matched functions need matchProvenance (how)">
-          via ⚠ missing
+          how ⚠ missing
         </span>
       )}
       {how.kind === 'incomplete' && (
         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-400/35 text-amber-900 border border-amber-600/50" title="AI needs model + reasoning + harness">
-          via ⚠ incomplete · {how.summary}
+          how ⚠ incomplete
         </span>
       )}
       {lockedBy && !fn.matched && (
@@ -1890,32 +1887,27 @@ function App() {
                     </div>
                   </div>
 
+                  {/* How is shown in attempt history only (no duplicate MATCHED VIA panel).
+                      Surface missing/incomplete provenance as a compact warning. */}
                   {(() => {
                     const st = provenanceStatus(selectedFn)
-                    if (st.kind === 'not_matched') return null
-                    if (st.kind === 'present') {
-                      return (
-                        <div className="glass p-2.5 rounded-lg text-xs">
-                          <span className="text-[11px] uppercase tracking-wide text-aero-muted">Matched via (how)</span>
-                          <div className="mt-0.5 font-medium text-indigo-900">{st.summary}</div>
-                          <div className="text-[11px] text-aero-muted mt-0.5">Credit (who) stays on <span className="mono">author</span>{selectedFn.author ? ` = ${selectedFn.author}` : ''}.</div>
-                        </div>
-                      )
-                    }
                     if (st.kind === 'required_missing') {
                       return (
                         <div className="glass p-2.5 rounded-lg text-xs border border-rose-400/40 bg-rose-50/40">
-                          <span className="text-[11px] uppercase tracking-wide text-rose-800">Matched via missing</span>
-                          <div className="mt-0.5 text-rose-900">Every matched function needs <span className="mono">matchProvenance</span> (human, or ai + model + reasoning + harness).</div>
+                          <span className="text-[11px] uppercase tracking-wide text-rose-800">How missing</span>
+                          <div className="mt-0.5 text-rose-900">Matched functions need <span className="mono">matchProvenance</span> (or a logged attempt) — human, or ai + model + reasoning + harness.</div>
                         </div>
                       )
                     }
-                    return (
-                      <div className="glass p-2.5 rounded-lg text-xs border border-amber-400/40 bg-amber-50/40">
-                        <span className="text-[11px] uppercase tracking-wide text-amber-900">Matched via incomplete</span>
-                        <div className="mt-0.5 text-amber-950">{st.summary} — AI records need model, reasoning, and harness slugs.</div>
-                      </div>
-                    )
+                    if (st.kind === 'incomplete') {
+                      return (
+                        <div className="glass p-2.5 rounded-lg text-xs border border-amber-400/40 bg-amber-50/40">
+                          <span className="text-[11px] uppercase tracking-wide text-amber-900">How incomplete</span>
+                          <div className="mt-0.5 text-amber-950">{st.summary} — AI records need model, reasoning, and harness.</div>
+                        </div>
+                      )
+                    }
+                    return null
                   })()}
 
                   <div className="flex flex-wrap gap-4 text-xs">
