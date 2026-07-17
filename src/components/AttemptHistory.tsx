@@ -230,23 +230,6 @@ function AttemptCard({
   )
 }
 
-function tally(rows: AttemptRow[]) {
-  let matched = 0
-  let near = 0
-  let other = 0
-  let bestDiv: number | null = null
-  for (const r of rows) {
-    if (r.status === 'matched') matched++
-    else if (r.status === 'near_miss') {
-      near++
-      if (r.divergences != null && (bestDiv == null || r.divergences < bestDiv)) {
-        bestDiv = r.divergences
-      }
-    } else other++
-  }
-  return { matched, near, other, bestDiv }
-}
-
 export function AttemptHistory({
   rows,
   source,
@@ -260,7 +243,6 @@ export function AttemptHistory({
 }) {
   const [open, setOpen] = useState(true)
   const forest = useMemo(() => buildAttemptForest(rows), [rows])
-  const stats = useMemo(() => tally(rows), [rows])
 
   if (loading) {
     return (
@@ -335,18 +317,7 @@ export function AttemptHistory({
               </span>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {stats.matched > 0 && (
-              <Chip tone="accent">{stats.matched} matched</Chip>
-            )}
-            {stats.near > 0 && (
-              <Chip tone="primary">
-                {stats.near} near-miss
-                {stats.bestDiv != null ? ` · best div ${stats.bestDiv}` : ''}
-              </Chip>
-            )}
-            {stats.other > 0 && <Chip>{stats.other} other</Chip>}
-          </div>
+          {/* No matched/best-div tallies — function header already has MATCHED / NEAR-MISS · N. */}
         </div>
         <ChevronDown
           className={`w-4 h-4 text-aero-muted shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
