@@ -474,6 +474,7 @@ function promptSection(
 function promptFooter(
   n: number,
   draftOpts?: Pick<DraftPromptOpts, 'includeNearMissDraft' | 'includeGhidraDraft'>,
+  footerOpts?: { omitDraftPolicy?: boolean },
 ) {
   const lines = [``]
   if (P.rules) lines.push(`Rules: ${P.rules}`)
@@ -501,7 +502,10 @@ function promptFooter(
   if (P.nearMissNote && draftOpts?.includeNearMissDraft !== false) {
     lines.push(``, P.nearMissNote)
   }
-  lines.push(``, draftPolicyBlock(draftOpts))
+  // buildFullPrompt already places draftPolicyBlock once after the header.
+  if (!footerOpts?.omitDraftPolicy) {
+    lines.push(``, draftPolicyBlock(draftOpts))
+  }
   return lines.join('\n')
 }
 
@@ -553,19 +557,22 @@ function buildFullPrompt(
     reasoning: draftOpts?.reasoning?.trim() || prefs.reasoning,
     harness: draftOpts?.harness?.trim() || prefs.harness,
   }
-  // Policy first (after header) so agents see DO/DON'T before any C or paths.
+  // Policy + MATCH_RESULT rules once up front (including SHARED DEFAULTS for
+  // model/reasoning/harness). Per function: body + slim MATCH_RESULT scaffold.
   const parts: string[] = [
     promptHeader(n) +
       '\n\n' +
       draftPolicyBlock(opts) +
-      matchResultHeaderAddon(author, sessionScope, batchSize),
+      matchResultHeaderAddon(author, sessionScope, batchSize, opts),
   ]
   for (const { fn, det } of items) {
     parts.push(promptSection(fn, det, opts))
     parts.push(matchResultBlock(fn, det, author, sessionScope, batchSize, opts))
   }
+  // nearMissNote / claims / PR lines only — draft policy already above
   parts.push(
-    promptFooter(n, opts) + matchResultFooterAddon(author, sessionScope, batchSize),
+    promptFooter(n, opts, { omitDraftPolicy: true }) +
+      matchResultFooterAddon(author, sessionScope, batchSize),
   )
   return parts.join('\n\n')
 }

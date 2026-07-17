@@ -88,7 +88,12 @@ export function matchResultHeaderAddon(
   author: string,
   sessionScope: 'focused' | 'batch',
   batchSize: number,
+  opts?: DraftPromptOpts,
 ): string {
+  const model = opts?.model?.trim() || 'grok-4.5'
+  const reasoning = opts?.reasoning?.trim() || 'high'
+  const harness = opts?.harness?.trim() || 'grok-build'
+
   const authorLine =
     author === 'YOUR_GITHUB_LOGIN'
       ? '  author     = REQUIRED credit field: operator GitHub login (same as classic chaos-viewer).\n               Put it on MATCH_RESULT.author — NOT inside matchProvenance.'
@@ -151,34 +156,38 @@ ATTEMPT TREE (required mental model — not a flat list of anonymous tries):
   - Trackers are SEPARATE (both may be true). They do not replace base.kind /
     parentAttemptId — still set those.
 
-CONTEXT FOCUS (required on EVERY attempt — same tier as model/harness):
-  sessionScope + batchSize must appear on every MATCH_RESULT, every try.
-  focused — session was only for this one function
-  batch   — multi-function session (this target was one of N)
-
 ${scopeLine}
 
-You MUST emit a MATCH_RESULT for **each function in this batch on every
-attempt**, even when:
-  - nothing improved
-  - near-miss did not beat the previous best
-  - compile failed
-  - you gave up / skipped
-
-status values:
-  matched | near_miss | no_progress | compile_error | failed | skipped
-
-matchProvenance answers HOW only:
-  kind=ai    → model + reasoning + harness (slug tokens, no spaces)
-  kind=human → human match (optional note); credit still goes in \`author\`
-
 ${authorLine}
+
+======================================================================
+SHARED DEFAULTS FOR THIS PROMPT (once — do not re-paste per function)
+======================================================================
+Unless a try truly differs, every MATCH_RESULT copies these fields as-is:
+
+\`\`\`yaml
+sessionScope: ${sessionScope}
+batchSize: ${batchSize}
+author: "${author}"
+matchProvenance:
+  kind: ai                    # ai | human
+  model: "${model}"            # slug; NOT "Grok 4.5"
+  reasoning: "${reasoning}"    # high | xhigh | max | medium | low | none
+  harness: "${harness}"        # slug; NOT "Grok Build"
+\`\`\`
 
 TOKEN RULES for matchProvenance (ai):
   - model:   GOOD: grok-4.5  claude-opus-4   BAD: "Grok 4.5"
   - harness: GOOD: grok-build  cursor-agent  BAD: "Grok Build"
   - reasoning: high | xhigh | max | medium | low | none
   Do NOT put the operator name in matchProvenance (no \`by\` field).
+  kind=human → no model fields; optional note only; credit still in author.
+
+You MUST emit a MATCH_RESULT for **each function in this batch on every
+attempt**, even when nothing improved / compile failed / you skipped.
+
+status values:
+  matched | near_miss | no_progress | compile_error | failed | skipped
 
 Do NOT invent a match. VERIFY until MATCH.
 Do NOT omit MATCH_RESULT because the try was "useless" — useless tries are data.
@@ -335,10 +344,11 @@ export function matchResultBlock(
   batchSize: number,
   opts?: DraftPromptOpts,
 ): string {
-  const authorComment =
-    author === 'YOUR_GITHUB_LOGIN'
-      ? '# REQUIRED GitHub login for credit (classic author field). Replace placeholder.'
-      : '# REQUIRED GitHub login for credit — keep this value (claims / env).'
+  // author / sessionScope / batchSize / matchProvenance are shared once in the
+  // header (SHARED DEFAULTS). Per-function scaffold only carries what differs.
+  void author
+  void sessionScope
+  void batchSize
 
   const incl = draftInclusion(det, opts)
   const usedNearMiss = incl.nearMiss
@@ -352,47 +362,28 @@ export function matchResultBlock(
           ? 'ghidra_scaffold'
           : 'scratch'
 
-  const model = opts?.model?.trim() || 'grok-4.5'
-  const reasoning = opts?.reasoning?.trim() || 'high'
-  const harness = opts?.harness?.trim() || 'grok-build'
-
   return `----------------------------------------------------------------------
-MATCH_RESULT — emit ONE node per function for THIS try
-(even if status=no_progress / compile_error / failed)
-
-Tree fields (attemptId / parentAttemptId / base) separate siblings and
-branches so a later reader can rebuild the attempt tree — not a flat diary.
+MATCH_RESULT for ${fn.name} — fill THIS try only
+(Copy sessionScope / batchSize / author / matchProvenance from SHARED DEFAULTS above
+unless this try truly differs.)
 
 \`\`\`yaml
 MATCH_RESULT:
   schemaVersion: 1
-  # --- identity (required — stable keys for the attempt log) ---
-  functionId: "${fn.id}"            # atlas function.id — NOT optional; not name alone
-  function: ${fn.name}              # display name (may change; functionId does not)
+  functionId: "${fn.id}"
+  function: ${fn.name}
   module: ${fn.module}
   addr: "0x${fn.addr.toString(16)}"
   size: ${fn.size}
-  attemptId: "01JEXAMPLE0000000000000000"  # UNIQUE this node: ULID/UUID (never a1/try2)
-  parentAttemptId: null         # null = new root; else a real prior attemptId for this functionId
-  loggedAt: "2026-07-15T12:00:00Z"  # ISO-8601 UTC when this try finished
-  status: no_progress   # matched | near_miss | no_progress | compile_error | failed | skipped
-  # --- attempt tree base ---
+  attemptId: "01JEXAMPLE0000000000000000"  # UNIQUE ULID/UUID this node
+  parentAttemptId: null
+  loggedAt: "2026-07-15T12:00:00Z"
+  status: no_progress
   base:
-    kind: ${baseKind}           # scratch | previous_attempt | near_miss_draft | ghidra_scaffold | matched_sibling | mixed
-  # DRAFT SOURCES (required — two independent trackers; both may be true):
-  usedNearMissDraft: ${usedNearMiss}   # this try OR any ancestor (inherit from parent)
-  usedGhidraDraft: ${usedGhidra}     # this try OR any ancestor (inherit from parent)
-  # REQUIRED every run (same tier as model/harness — never omit):
-  sessionScope: ${sessionScope}   # focused | batch
-  batchSize: ${batchSize}         # 1 if focused; N if batch
-  # WHO (classic credit — required when status=matched; preferred always):
-  author: "${author}"            ${authorComment}
-  # HOW this try was run (required for kind=ai on every attempt):
-  matchProvenance:
-    kind: ai                    # ai | human
-    model: "${model}"            # slug; NOT display names like "Grok 4.5"
-    reasoning: "${reasoning}"    # high | xhigh | max | medium | low | none
-    harness: "${harness}"        # slug; NOT display names like "Grok Build"
+    kind: ${baseKind}
+  usedNearMissDraft: ${usedNearMiss}
+  usedGhidraDraft: ${usedGhidra}
+  # + SHARED DEFAULTS: sessionScope, batchSize, author, matchProvenance
   divergences: null
   prevBestDivergences: null
   improvedNearMiss: false
@@ -406,45 +397,22 @@ export function matchResultFooterAddon(
   sessionScope: 'focused' | 'batch',
   batchSize: number,
 ): string {
-  const authorRule =
-    author === 'YOUR_GITHUB_LOGIN'
-      ? `   - author → on MATCH_RESULT.author (classic credit). Required when matched.
-     Replace YOUR_GITHUB_LOGIN. Not inside matchProvenance.`
-      : `   - author → use "${author}" on MATCH_RESULT.author when known/matched.
-     Not inside matchProvenance.`
-
+  // Keep short: full rules live once in the header SHARED DEFAULTS + attempt tree.
+  void author
   return `
 
 ======================================================================
 BEFORE YOU FINISH
 ======================================================================
-1. For EACH function, emit a filled MATCH_RESULT **node** for this try.
-2. Identity (required): schemaVersion=1, functionId (atlas id), unique attemptId
-   (ULID/UUID — never a1/try2), parentAttemptId, loggedAt (UTC ISO-8601), base.
-3. Draft trackers (required, independent): usedNearMissDraft and usedGhidraDraft.
-   Pre-filled from this prompt; INHERIT true from parentAttemptId's node if the
-   parent had that flag true.
-4. status must reflect reality (prefer no_progress over silence).
-5. ALWAYS set sessionScope=${sessionScope} and batchSize=${batchSize} on every
-   MATCH_RESULT (every function, every try) — not optional; like model/harness.
-6. Tree links:
-   - parentAttemptId = the node you actually edited/built from
-   - no_progress under the same parent as siblings of later improved tries
-   - after an improved near_miss, continue with parent = that new node
-7. If status=matched (verify says MATCH):
-   - matchProvenance kind=ai → model + reasoning + harness (slug tokens)
-   - matchProvenance kind=human → no model fields; optional note only
-${authorRule}
-8. If near_miss: include divergences (+ draft when available). Still log if
-   it did NOT beat prevBestDivergences (improvedNearMiss: false).
-9. Operators append every MATCH_RESULT into config/match_attempts.jsonl
-   (tools/log_attempt.py or equivalent). Preserve functionId / attemptId /
-   parentAttemptId / loggedAt / base / usedNearMissDraft / usedGhidraDraft.
-10. Open a PR when matched; PR author should match \`author\`.
+- Emit one MATCH_RESULT per function for this try (even no_progress / failed).
+- Per-function scaffold above + SHARED DEFAULTS (sessionScope=${sessionScope},
+  batchSize=${batchSize}, author, matchProvenance) = the full node.
+- Unique attemptId every time; parentAttemptId = the node you built on (or null).
+- Inherit usedNearMissDraft / usedGhidraDraft from parent when true.
+- near_miss → set divergences; matched → only after verify MATCH; then open a PR.
+- Operators log every node to config/match_attempts.jsonl (tools/log_attempt.py).
 
-Refuse to claim "matched" without verify succeeding.
-Never skip logging a failed/empty try — it is a leaf on the tree.
-Never reuse attemptId. Never key history by function name alone — use functionId.`
+Never claim matched without verify. Never skip a useless try. Never reuse attemptId.`
 }
 
 /** Resolve operator GitHub login for author prefill (claims handle). */
