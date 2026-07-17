@@ -177,8 +177,8 @@ function AttemptCard({
                 <User className="w-3 h-3" /> human
               </Chip>
             ) : how ? (
-              <Chip tone="indigo" title="matchProvenance (how)">
-                via {how}
+              <Chip tone="indigo" title="How this try was run">
+                {how}
               </Chip>
             ) : null}
             {row.author && (

@@ -6,6 +6,7 @@
  *  2. Repo main:  raw…/main/config/match_attempts.jsonl
  *  3. Repo chaos-data: raw…/chaos-data/match_attempts.jsonl
  */
+import { formatHowDisplay } from './experimental'
 
 export type AttemptRow = {
   schemaVersion?: number
@@ -173,10 +174,11 @@ export function attemptStatusLabel(row: AttemptRow): string {
 }
 
 export function attemptHowLine(row: AttemptRow): string {
-  if (row.kind === 'human') return 'human'
-  if (row.kind === 'ai') {
-    const bits = [row.model, row.reasoning, row.harness].filter(Boolean)
-    return bits.length ? `ai · ${bits.join(' · ')}` : 'ai'
-  }
-  return row.kind || ''
+  return formatHowDisplay({
+    kind: row.kind,
+    model: row.model,
+    reasoning: row.reasoning,
+    harness: row.harness,
+    note: row.note,
+  })
 }
