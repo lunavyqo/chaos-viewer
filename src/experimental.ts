@@ -419,7 +419,7 @@ BEFORE YOU FINISH
 ======================================================================
 1. For EACH function, emit a filled MATCH_RESULT **node** for this try.
 2. Identity (required): schemaVersion=1, functionId (atlas id), unique attemptId
-   (ULID/UUID — never a1/try2), parentAttemptId, loggedAt (UTC ISO-8601), base.
+   (ULID/UUID — never a1/try2), parentAttemptId, base. Do NOT log wall-clock times.
 3. Draft trackers (required, independent): usedNearMissDraft and usedGhidraDraft.
    Pre-filled from this prompt; INHERIT true from parentAttemptId's node if the
    parent had that flag true.
@@ -438,7 +438,7 @@ ${authorRule}
    it did NOT beat prevBestDivergences (improvedNearMiss: false).
 9. Operators append every MATCH_RESULT into config/match_attempts.jsonl
    (tools/log_attempt.py or equivalent). Preserve functionId / attemptId /
-   parentAttemptId / loggedAt / base / usedNearMissDraft / usedGhidraDraft.
+   parentAttemptId / base / usedNearMissDraft / usedGhidraDraft. Never log loggedAt/ts.
 10. Open a PR when matched; PR author should match \`author\`.
 
 Refuse to claim "matched" without verify succeeding.
